@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BarcodeIcon, GpsIcon, CameraIcon, CheckCircleIcon, UploadIcon } from './icons';
-import type { SubmittedJobData, WorkOrderData } from '../types';
+import { BarcodeIcon, GpsIcon, CameraIcon, CheckCircleIcon, UploadIcon, WarningIcon, ShieldCheckIcon } from './icons';
+import type { WorkOrderPacket, ChecklistItem } from '../types';
+import { mockWorkOrders } from '../data/mockWorkOrders';
+import SafetyChecklistModal from './SafetyChecklistModal';
+import type { FieldSubmissionData } from '../App';
+
 
 // Add BarcodeDetector type definitions for browsers that support it.
 // This avoids TypeScript errors if the lib definitions are not up to date.
@@ -28,7 +32,7 @@ declare global {
 }
 
 interface FieldCrewAppProps {
-  onSubmit: (data: SubmittedJobData) => void;
+  onSubmit: (data: FieldSubmissionData) => void;
 }
 
 type CaptureMode = 'barcode' | 'photo' | null;
@@ -53,70 +57,38 @@ const DataCaptureButton = ({ icon, text, onClick, captured, disabled = false }: 
   </button>
 );
 
-const WorkOrderTask = ({ data, onUploadTrigger, fileInputRef, onFileChange, fileError }: { 
-  data: WorkOrderData | null, 
-  onUploadTrigger: () => void, 
-  fileInputRef: React.RefObject<HTMLInputElement>,
-  onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void,
-  fileError: string | null
-}) => {
-  const captured = !!data;
-
-  return (
-    <div className={`rounded-lg transition-all duration-300 shadow-sm ${captured ? 'bg-locus-blue text-white' : 'bg-gray-100 text-gray-700'}`}>
-      <input id="work-order-upload" type="file" accept="application/json" className="hidden" onChange={onFileChange} ref={fileInputRef} />
-      <button
-        onClick={onUploadTrigger}
-        disabled={captured}
-        className={`w-full flex items-center justify-between p-3 text-left rounded-lg ${captured ? 'cursor-not-allowed' : 'hover:bg-gray-200'}`}
-      >
-        <div className="flex items-center gap-3">
-          <UploadIcon className="w-6 h-6" />
-          <span className="font-medium">{captured ? 'Work Order Uploaded' : 'Upload Work Order'}</span>
-        </div>
-        {captured && <CheckCircleIcon className="w-6 h-6 text-white" />}
-      </button>
-      
-      {captured && data && (
-         <div className="space-y-1 text-gray-200 text-sm mt-0 pb-3 px-3">
-            <div className="border-t border-white/20 pt-3 mt-2 pl-[36px]">
-              <p><span className="font-bold text-white w-24 inline-block">Work Order:</span> {data.workOrder}</p>
-              <p><span className="font-bold text-white w-24 inline-block">Task:</span> {data.task}</p>
-              <p><span className="font-bold text-white w-24 inline-block">Location:</span> {data.location}</p>
-            </div>
-        </div>
-      )}
-      
-      {!captured && fileError && <p className="text-red-500 text-xs px-3 pb-2 pt-1 text-center font-medium">{fileError}</p>}
-    </div>
-  );
-};
-
 const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
-  const [workOrderData, setWorkOrderData] = useState<WorkOrderData | null>(null);
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrderPacket | null>(null);
+  const [isManualUpload, setIsManualUpload] = useState<boolean>(false);
   const [materialId, setMaterialId] = useState<string | null>(null);
+  const [isMaterialVerified, setIsMaterialVerified] = useState<boolean | null>(null);
   const [gpsCoords, setGpsCoords] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-
+  const [isChecklistModalOpen, setIsChecklistModalOpen] = useState<boolean>(false);
+  const [isChecklistComplete, setIsChecklistComplete] = useState<boolean>(false);
+  const [completedChecklist, setCompletedChecklist] = useState<ChecklistItem[]>([]);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
+  
   const resetForm = () => {
-    setWorkOrderData(null);
+    setSelectedWorkOrder(null);
     setMaterialId(null);
+    setIsMaterialVerified(null);
     setGpsCoords(null);
     setPhotoUrl(null);
     setError(null);
+    setIsManualUpload(false);
     setFileError(null);
-    if(fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    setIsChecklistComplete(false);
+    setIsChecklistModalOpen(false);
+    setCompletedChecklist([]);
   };
 
   useEffect(() => {
@@ -198,7 +170,14 @@ const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
             try {
               const barcodes = await barcodeDetector.detect(canvas);
               if (barcodes.length > 0 && barcodes[0].rawValue) {
-                setMaterialId(barcodes[0].rawValue);
+                const scannedValue = barcodes[0].rawValue;
+                setMaterialId(scannedValue);
+
+                const isVerified = selectedWorkOrder?.billOfMaterials.some(
+                  (item) => item.itemId === scannedValue
+                ) ?? false;
+                setIsMaterialVerified(isVerified);
+                
                 setCaptureMode(null); // This will trigger useEffect cleanup and stop the scan.
                 return; // Stop the loop
               }
@@ -218,10 +197,10 @@ const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
     return () => {
       stopCameraAndScan();
     };
-  }, [captureMode]);
+  }, [captureMode, selectedWorkOrder]);
 
 
-  const allDataCaptured = workOrderData && materialId && gpsCoords && photoUrl;
+  const allDataCaptured = selectedWorkOrder && materialId && gpsCoords && photoUrl && isChecklistComplete;
 
   const handleCaptureGps = () => {
     setIsLocating(true);
@@ -260,44 +239,85 @@ const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
   const handleSubmit = () => {
     if (allDataCaptured) {
       onSubmit({ 
-        ...workOrderData,
+        workOrder: selectedWorkOrder,
         materialId, 
         gpsCoords, 
-        photoUrl 
+        photoUrl,
+        isMaterialVerified: isMaterialVerified as boolean,
+        completedChecklist,
       });
       resetForm();
     }
   };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setFileError(null);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const text = e.target?.result;
-          if (typeof text === 'string') {
-            const parsedData = JSON.parse(text);
-            if (parsedData.workOrder && parsedData.task && parsedData.location) {
-              setWorkOrderData(parsedData);
-            } else {
-              setFileError('Invalid work order file. Missing required fields.');
-            }
-          }
-        } catch (err) {
-          setFileError('Failed to parse JSON. Please upload a valid file.');
-        }
-      };
-      reader.onerror = () => {
-        setFileError('Failed to read the file.');
-      };
-      reader.readAsText(file);
+  const handleWorkOrderSelect = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const selectedValue = event.target.value;
+    setFileError(null);
+    setIsChecklistComplete(false);
+    setCompletedChecklist([]);
+
+    if (selectedValue === 'manual-upload') {
+      setIsManualUpload(true);
+      setSelectedWorkOrder(null);
+    } else {
+      setIsManualUpload(false);
+      const workOrder = mockWorkOrders.find(wo => wo.id === selectedValue) || null;
+      setSelectedWorkOrder(workOrder);
     }
   };
   
   const handleUploadTrigger = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/json') {
+      setFileError('Invalid file type. Please upload a JSON file.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result;
+        if (typeof text !== 'string') {
+          throw new Error("Failed to read file content.");
+        }
+        const data = JSON.parse(text);
+        
+        // Basic validation for WorkOrderPacket structure
+        if (data.id && data.workOrderNumber && data.task && data.location && Array.isArray(data.billOfMaterials) && Array.isArray(data.safetyChecklist)) {
+            setSelectedWorkOrder(data as WorkOrderPacket);
+            setFileError(null);
+            setIsChecklistComplete(false);
+        } else {
+          throw new Error("JSON does not match Work Order Packet format.");
+        }
+      } catch (error) {
+        console.error("Error parsing work order file:", error);
+        setFileError('Failed to parse file. Ensure it is a valid Work Order JSON.');
+        setSelectedWorkOrder(null);
+      }
+    };
+    reader.onerror = () => {
+        setFileError("Failed to read the file.");
+        setSelectedWorkOrder(null);
+    };
+    reader.readAsText(file);
+
+    // Reset the input value to allow re-uploading the same file
+    if(event.target) {
+      event.target.value = '';
+    }
+  };
+  
+  const handleChecklistComplete = (items: ChecklistItem[]) => {
+    setCompletedChecklist(items);
+    setIsChecklistComplete(true);
+    setIsChecklistModalOpen(false);
   };
 
   const CaptureView = () => (
@@ -356,18 +376,121 @@ const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
           </header>
           
           {error && <p className="text-red-500 text-sm text-center mb-3">{error}</p>}
-
+          
           <div className="space-y-3">
-            <WorkOrderTask 
-              data={workOrderData}
-              onUploadTrigger={handleUploadTrigger}
-              fileInputRef={fileInputRef}
-              onFileChange={handleFileChange}
-              fileError={fileError}
+              <div className="relative">
+                <select
+                  id="work-order-select"
+                  value={isManualUpload ? 'manual-upload' : selectedWorkOrder?.id || ''}
+                  onChange={handleWorkOrderSelect}
+                  className="w-full p-3 bg-gray-100 border border-gray-300 rounded-lg appearance-none focus:outline-none focus:ring-2 focus:ring-locus-blue font-medium pr-8"
+                >
+                  <option value="" disabled>Select a Work Order...</option>
+                  {mockWorkOrders.map(wo => (
+                    <option key={wo.id} value={wo.id}>
+                      {wo.workOrderNumber}
+                    </option>
+                  ))}
+                  <option value="manual-upload">Upload Manually...</option>
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-700">
+                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                </div>
+              </div>
+            
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+              accept="application/json"
             />
-            <DataCaptureButton icon={<BarcodeIcon />} text="Scan Material Barcode" onClick={() => setCaptureMode('barcode')} captured={!!materialId} />
-            <DataCaptureButton icon={<GpsIcon />} text={isLocating ? 'Locating...' : 'Capture GPS Location'} onClick={handleCaptureGps} captured={!!gpsCoords} disabled={isLocating} />
-            <DataCaptureButton icon={<CameraIcon />} text="Take Installation Photo" onClick={() => setCaptureMode('photo')} captured={!!photoUrl} />
+            
+            {isManualUpload && !selectedWorkOrder && (
+              <div className="mt-3 p-4 border-2 border-dashed border-gray-300 rounded-lg text-center animate-fade-in">
+                <button
+                  onClick={handleUploadTrigger}
+                  className="w-full flex flex-col items-center justify-center p-4 rounded-lg transition-colors bg-gray-50 hover:bg-gray-100 text-locus-blue"
+                >
+                  <UploadIcon className="w-8 h-8 mb-2" />
+                  <span className="font-semibold">Click to upload JSON</span>
+                  <span className="text-xs text-gray-500 mt-1">
+                    Upload a custom Work Order Packet file.
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {fileError && <p className="text-red-500 text-sm text-center mt-2 animate-fade-in">{fileError}</p>}
+
+            {selectedWorkOrder && (
+              <div className="animate-fade-in">
+                <div className="p-3 bg-locus-blue/5 border-l-4 border-locus-blue/50 rounded-r-lg text-sm space-y-1">
+                  <p><span className="font-bold text-locus-text w-24 inline-block">Work Order:</span> {selectedWorkOrder.workOrderNumber}</p>
+                  <p><span className="font-bold text-locus-text w-24 inline-block">Task:</span> {selectedWorkOrder.task}</p>
+                  <p><span className="font-bold text-locus-text w-24 inline-block">Location:</span> {selectedWorkOrder.location}</p>
+                </div>
+
+                <div className="mt-4 border-t pt-4 space-y-3">
+                  <button
+                    onClick={() => setIsChecklistModalOpen(true)}
+                    disabled={isChecklistComplete}
+                    className={`w-full flex items-center justify-between p-3 rounded-lg transition-all duration-300 text-left ${
+                      isChecklistComplete
+                        ? 'bg-green-600 text-white cursor-not-allowed'
+                        : 'bg-locus-orange/90 hover:bg-locus-orange text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <ShieldCheckIcon className="w-6 h-6" />
+                      <span className="font-medium">
+                        {isChecklistComplete ? 'Safety Checklist Complete' : 'Complete Safety Checklist'}
+                      </span>
+                    </div>
+                    {isChecklistComplete && <CheckCircleIcon className="w-6 h-6 text-white" />}
+                  </button>
+                
+                  {!materialId ? (
+                    <DataCaptureButton 
+                      icon={<BarcodeIcon />} 
+                      text="Scan Material Barcode" 
+                      onClick={() => setCaptureMode('barcode')} 
+                      captured={!!materialId} 
+                      disabled={!isChecklistComplete} 
+                    />
+                  ) : (
+                    <div className={`w-full flex items-center justify-between p-3 rounded-lg text-left shadow-sm ${
+                        isMaterialVerified
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-yellow-100 text-yellow-800'
+                    }`}>
+                        <div className="flex items-center gap-3">
+                            {isMaterialVerified ? (
+                                <CheckCircleIcon className="w-6 h-6 text-green-600" />
+                            ) : (
+                                <WarningIcon className="w-6 h-6 text-yellow-600" />
+                            )}
+                            <div className="flex flex-col">
+                                <span className="font-medium">
+                                    {isMaterialVerified ? 'Verified Material' : 'Unverified Material'}
+                                </span>
+                                <span className="text-xs font-mono">{materialId}</span>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={() => setCaptureMode('barcode')} 
+                            className="font-semibold text-xs py-1 px-3 rounded-full hover:bg-black/10 transition-colors"
+                        >
+                            RE-SCAN
+                        </button>
+                    </div>
+                  )}
+                  
+                  <DataCaptureButton icon={<GpsIcon />} text={isLocating ? 'Locating...' : 'Capture GPS Location'} onClick={handleCaptureGps} captured={!!gpsCoords} disabled={isLocating || !isChecklistComplete} />
+                  <DataCaptureButton icon={<CameraIcon />} text="Take Installation Photo" onClick={() => setCaptureMode('photo')} captured={!!photoUrl} disabled={!isChecklistComplete} />
+                </div>
+              </div>
+            )}
           </div>
         </div>
         
@@ -390,6 +513,13 @@ const FieldCrewApp: React.FC<FieldCrewAppProps> = ({ onSubmit }) => {
 
   return (
     <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-gray-200 p-6 flex flex-col min-h-[600px]">
+      {isChecklistModalOpen && selectedWorkOrder && (
+          <SafetyChecklistModal 
+            checklist={selectedWorkOrder.safetyChecklist}
+            onComplete={handleChecklistComplete}
+            onClose={() => setIsChecklistModalOpen(false)}
+          />
+      )}
       {captureMode ? <CaptureView /> : <JobPacketView /> }
     </div>
   );

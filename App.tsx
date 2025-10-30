@@ -1,15 +1,77 @@
 import React, { useState } from 'react';
 import FieldCrewApp from './components/FieldCrewApp';
 import BackOfficeDashboard from './components/BackOfficeDashboard';
-import type { SubmittedJobData } from './types';
+import type { SubmittedJobData, JobInspectionStatus, JobGisStatus, JobFinancialStatus, FinancialData } from './types';
+
+// This is what the field app will submit
+export type FieldSubmissionData = Omit<SubmittedJobData, 'instanceId' | 'submissionDate' | 'inspectionStatus' | 'gisStatus' | 'financialStatus' | 'financials' | 'reportHtml'>;
 
 function App() {
   const [submittedData, setSubmittedData] = useState<SubmittedJobData[]>([]);
 
-  const handleJobSubmit = (data: SubmittedJobData) => {
-    setSubmittedData(prevData => [...prevData, data]);
+  const handleJobSubmit = (data: FieldSubmissionData) => {
+    const newJob: SubmittedJobData = {
+      ...data,
+      instanceId: `job-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      submissionDate: new Date().toISOString(),
+      inspectionStatus: 'Pending',
+      gisStatus: 'Pending',
+      financialStatus: 'Pending',
+    };
+    setSubmittedData(prevData => [...prevData, newJob]);
   };
   
+  const handleUpdateJobStatus = (
+    instanceId: string, 
+    statusType: 'inspection' | 'gis' | 'financial', 
+    newStatus: JobInspectionStatus | JobGisStatus | JobFinancialStatus
+  ) => {
+    setSubmittedData(prevData =>
+      prevData.map(job => {
+        if (job.instanceId === instanceId) {
+          const updatedJob = { ...job };
+          switch (statusType) {
+            case 'inspection':
+              updatedJob.inspectionStatus = newStatus as JobInspectionStatus;
+              break;
+            case 'gis':
+              updatedJob.gisStatus = newStatus as JobGisStatus;
+              break;
+            case 'financial':
+              updatedJob.financialStatus = newStatus as JobFinancialStatus;
+              // If we are generating financials, create some mock data
+              if (newStatus === 'Generated') {
+                const laborCost = Math.floor(Math.random() * (2000 - 500 + 1)) + 500;
+                const materialCost = Math.floor(Math.random() * (5000 - 1000 + 1)) + 1000;
+                const generatedFinancials: FinancialData = {
+                  reportId: `FIN-${job.workOrder.workOrderNumber}-${Date.now().toString().slice(-6)}`,
+                  laborCost,
+                  materialCost,
+                  totalCost: laborCost + materialCost,
+                };
+                updatedJob.financials = generatedFinancials;
+              }
+              break;
+          }
+          return updatedJob;
+        }
+        return job;
+      })
+    );
+  };
+
+  const handleAttachReports = (reports: { instanceId: string; html: string }[]) => {
+    setSubmittedData(prevData =>
+      prevData.map(job => {
+        const reportForJob = reports.find(r => r.instanceId === job.instanceId);
+        if (reportForJob) {
+          return { ...job, reportHtml: reportForJob.html };
+        }
+        return job;
+      })
+    );
+  };
+
   const resetDemo = () => {
     setSubmittedData([]);
   }
@@ -36,7 +98,13 @@ function App() {
             <FieldCrewApp onSubmit={handleJobSubmit} />
           </div>
           <div className="lg:w-2/3 flex justify-center lg:justify-start">
-            <BackOfficeDashboard isSubmitted={hasSubmittedJobs} data={submittedData} onReset={resetDemo} />
+            <BackOfficeDashboard 
+              isSubmitted={hasSubmittedJobs} 
+              data={submittedData} 
+              onReset={resetDemo} 
+              onUpdateStatus={handleUpdateJobStatus} 
+              onAttachReports={handleAttachReports}
+            />
           </div>
         </div>
       </div>
