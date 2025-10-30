@@ -1,0 +1,8 @@
+{
+  "name": "Utility Digital Construction Demo",
+  "description": "An interactive demo simulating a digital construction management platform. It showcases a field crew's mobile data capture and the instant update on a back-office dashboard, eliminating paper and automating the as-builting process.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
